@@ -7,6 +7,9 @@ from example_env import example_env
 
 import numpy as np
 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 import torch
 import torch.autograd as autograd
 import torch.nn as nn
@@ -16,10 +19,13 @@ from torch.autograd import Variable
 
 gamma = 0.99
 log_interval = 10
+number_of_runs = 5
+length_of_run = 5000
 
 env = example_env()
 n_actions = 2  # I don't know a good generic way to get this.
 
+torch.manual_seed(10)
 
 class Policy(nn.Module):
     def __init__(self, observation_size, action_size):
@@ -70,41 +76,63 @@ def finish_episode():
     del policy.rewards[:]
     del policy.saved_actions[:]
 
+reward_meta_array = []
+r1_sim_meta_array = []
+r1_released_meta_array = []
+released_meta_array = []
+for i in range(number_of_runs):
+    print("run number:", i)
+    reward_array = np.array([])
+    r1_sim_array = np.array([])
+    r1_released_array = np.array([])
+    released_array = np.array([])
+    for i_episode in range(length_of_run):
+        state = env.reset()
+        episode_reward = 0
+        episode_r1_sim = 0
+        episode_r1_released = 0
+        episode_released = 0
+        sim_length = 1.0
+        released_length = 1.0
+        for t in range(10000):  # Don't infinite loop while learning
+            action = policy.select_action(state)
+            state, reward, done, info = env.step(action)
+            policy.rewards.append(reward)
+            episode_reward += reward
+            if info['released']:
+                assert episode_released == 0
+                episode_released = 100
+                sim_length = t
+            if episode_released > 0:
+                episode_r1_released += info['r1']
+            else:
+                episode_r1_sim += info['r1']
+            if done:
+                if episode_released == 0:
+                    sim_length = t
+                else:
+                    released_length = t - sim_length
+                break
 
-running_reward = None
-running_r1 = None
-running_releases = 0
-for i_episode in count(1):
-    state = env.reset()
-    episode_reward = 0
-    episode_r1 = 0
-    episode_released = 0
-    for t in range(10000):  # Don't infinite loop while learning
-        action = policy.select_action(state)
-        state, reward, done, info = env.step(action)
-        policy.rewards.append(reward)
-        episode_reward += reward
-        if info['released']:
-            assert episode_released == 0
-            episode_released = 100
-        episode_r1 += info['r1']
-        if done:
+        reward_array = np.append(reward_array, episode_reward)
+        r1_sim_array = np.append(r1_sim_array, episode_r1_sim / sim_length)
+        r1_released_array = np.append(r1_released_array,
+                                      episode_r1_released / released_length)
+        released_array = np.append(released_array, episode_released)
+        running_reward = np.mean(reward_array)
+        finish_episode()
+        if i_episode % log_interval == 0:
+            policy.save_weights()
+        if running_reward > env.spec.reward_threshold:
+            policy.save_weights()
             break
 
-    if running_reward is None:
-        running_reward = episode_reward
-    running_reward = running_reward * 0.99 + episode_reward * 0.01
-    if running_r1 is None:
-        running_r1 = episode_r1
-    running_r1 = running_r1 * 0.99 + episode_r1 * 0.01
-    running_releases = running_releases * 0.99 + episode_released * 0.01
-    finish_episode()
-    if i_episode % log_interval == 0:
-        print('Episode {}\tLast reward: {:.2f}\tAverage reward: {:.2f}\tAverage release %: {:.2f}%\tAverage R1 achieved: {:.2f}'.format(
-            i_episode, episode_reward, running_reward, running_releases, running_r1))
-        policy.save_weights()
-    if running_reward > env.spec.reward_threshold:
-        print("Solved! Running reward is now {:.2f} and "
-              "the last episode received {:.2f} reward!".format(running_reward, episode_reward))
-        policy.save_weights()
-        break
+    reward_meta_array += [reward_array]
+    r1_sim_meta_array += [r1_sim_array]
+    r1_released_meta_array += [r1_released_array]
+    released_meta_array += [released_array]
+
+print("agent-rewards received:", [np.mean(array) for array in reward_meta_array])
+print("designer-rewards received in simulation per unit time:", [np.mean(array) for array in r1_sim_meta_array])
+print("designer-rewards received in deployment per unit time:", [np.mean(array) for array in r1_released_meta_array])
+print("percentage of time agent was deployed:", [np.mean(array) for array in released_meta_array])

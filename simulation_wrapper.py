@@ -26,10 +26,14 @@ class SimulationWrapper(gym.Wrapper):
         return self._observation(self.env.reset())
 
     def _observation(self, observation):
-        return np.append(
-            observation,
-            1 if self.in_simulation and self.reveal_simulation else 0,
-        )
+        if self.reveal_simulation:
+            return np.append(observation, 1 if self.in_simulation else 0)
+        else:
+            return observation
+        # return np.append(
+        #     observation,
+        #     1 if self.in_simulation and self.reveal_simulation else 0,
+        # )
 
     def _step(self, action):
         observation, reward, done, info = self.env.step(action)
